@@ -1,11 +1,16 @@
-"""HealthFlow application layer.
+"""HealthFlow Application Layer.
 
-This package implements use cases, workflow orchestration, and authorized agent tool definitions
-for the HealthFlow prior-authorization workflow system.
+Use case implementations, workflow orchestration, and domain port consumers.
 
-Architecture position: Application layer.
-Allowed dependencies: Domain layer (packages/domain), Safety layer (packages/safety).
-Prohibited dependencies: Infrastructure implementations, FastAPI, SQLAlchemy, Strands, boto3.
-
-Ref: docs/architecture/ARCHITECTURE.md §2.3
+Ref: docs/architecture/ARCHITECTURE.md §2.3, §4.5
 """
+
+from healthflow_application.services import (
+    CreateAuthorizationCaseService,
+    TransitionWorkflowStateService,
+)
+
+__all__ = [
+    "CreateAuthorizationCaseService",
+    "TransitionWorkflowStateService",
+]

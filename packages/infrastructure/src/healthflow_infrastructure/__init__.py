@@ -1,14 +1,58 @@
-"""HealthFlow infrastructure layer.
+"""HealthFlow Infrastructure Layer.
 
-This package implements port interfaces defined in the domain layer:
-database repositories, simulated system adapters, and the pgvector/RAG adapter.
+PostgreSQL persistence adapters, SQLAlchemy 2.x ORM models, and repository implementations.
 
-Architecture position: Infrastructure layer.
-Allowed dependencies: Domain layer (packages/domain), SQLAlchemy 2.x, Alembic, pgvector, boto3.
-Prohibited: SQLAlchemy model types must not leak into domain or application layers.
-
-Note: Production infrastructure dependencies (SQLAlchemy, etc.) are added in the
-infrastructure implementation phase, not in Phase 1.
-
-Ref: docs/architecture/ARCHITECTURE.md §2.5
+Ref: docs/architecture/ARCHITECTURE.md §2.5, §14
 """
+
+from healthflow_infrastructure.database import (
+    Base,
+    create_db_engine,
+    create_session_factory,
+    session_scope,
+)
+from healthflow_infrastructure.models import (
+    AuditRecordModel,
+    AuthorizationCaseModel,
+    EscalationRecordModel,
+    InsurancePlanModel,
+    PatientModel,
+    SubmissionRecordModel,
+    VerificationRecordModel,
+    WorkflowTransitionModel,
+)
+from healthflow_infrastructure.repositories import (
+    PostgresAuditRepository,
+    PostgresAuthorizationCaseRepository,
+    PostgresEscalationRepository,
+    PostgresInsurancePlanRepository,
+    PostgresPatientRepository,
+    PostgresSubmissionRepository,
+    PostgresUnitOfWork,
+    PostgresVerificationRepository,
+    PostgresWorkflowStateRepository,
+)
+
+__all__ = [
+    "AuditRecordModel",
+    "AuthorizationCaseModel",
+    "Base",
+    "EscalationRecordModel",
+    "InsurancePlanModel",
+    "PatientModel",
+    "PostgresAuditRepository",
+    "PostgresAuthorizationCaseRepository",
+    "PostgresEscalationRepository",
+    "PostgresInsurancePlanRepository",
+    "PostgresPatientRepository",
+    "PostgresSubmissionRepository",
+    "PostgresUnitOfWork",
+    "PostgresVerificationRepository",
+    "PostgresWorkflowStateRepository",
+    "SubmissionRecordModel",
+    "VerificationRecordModel",
+    "WorkflowTransitionModel",
+    "create_db_engine",
+    "create_session_factory",
+    "session_scope",
+]
