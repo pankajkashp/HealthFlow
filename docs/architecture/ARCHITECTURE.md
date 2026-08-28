@@ -1,9 +1,9 @@
 # HealthFlow — Technical Architecture Specification
 
-**Version:** 1.0
-**Status:** APPROVED — Phase 0B
+**Version:** 1.1
+**Status:** APPROVED — Updated in Phase 0C
 **Authority:** Product Requirements Specification v1.0
-**Phase:** 0B — Technical Architecture Specification
+**Phase:** 0B (foundation) / 0C (decisions resolved)
 
 This document is the authoritative technical architecture for HealthFlow.
 All implementation phases must conform to this architecture.
@@ -884,23 +884,21 @@ The agent is a **reasoning component**. It:
 │   Returns:   Tool invocation requests                      │
 │                                                            │
 │   ┌────────────────────────────────────────────────────┐  │
-│   │               AUTHORIZED TOOL FUNCTIONS            │  │
+│   │          AUTHORIZED TOOL FUNCTIONS (AD-014)        │  │
 │   │          (defined in packages/application)         │  │
 │   │                                                    │  │
-│   │  get_patient_record()                              │  │
-│   │  get_insurance_plan()                              │  │
-│   │  get_authorization_requirements()                  │  │
-│   │  get_required_documents()                          │  │
-│   │  validate_authorization_package()                  │  │
-│   │  submit_authorization_request()                    │  │
-│   │  get_authorization_status()                        │  │
-│   │  verify_authorization_outcome()                    │  │
-│   │  request_human_escalation()                        │  │
+│   │  get_patient_record()          Read / WORKFLOW_READ│  │
+│   │  get_insurance_plan()          Read / WORKFLOW_READ│  │
+│   │  get_authorization_requirements() Read/WORKFLOW_READ│ │
+│   │  get_required_document()       Read / WORKFLOW_READ│  │
+│   │  validate_authorization_package() Read/WORKFLOW_READ│ │
+│   │  submit_authorization_request() Mutating/WFLOW_SUBMIT│ │
+│   │  get_authorization_status()    Read / WORKFLOW_READ│  │
+│   │  verify_authorization_outcome() Read/WORKFLOW_READ │  │
+│   │  request_escalation()      Mutating/WFLOW_ESCALATE │  │
 │   │                                                    │  │
-│   │  NOTE: Tool names are illustrative.                │  │
-│   │  Exact names are defined in the tool specification │  │
-│   │  phase. Each tool routes through the Application   │  │
-│   │  Layer and its safety controls.                    │  │
+│   │  Tool contracts are finalized in AD-014.           │  │
+│   │  Each tool routes through the full safety flow.    │  │
 │   └────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────┘
                             │
@@ -1161,16 +1159,26 @@ and infrastructure ports.
 
 ### 11.3 State Definitions
 
-Detailed state enumeration and transition graph will be defined in the workflow
-specification phase, which is a later approved phase.
+Resolved in AD-013 (Phase 0C). The MRI prior-authorization workflow defines exactly **12 named states**.
 
-No states are invented here beyond what is justified by the requirements:
-- An initial state (workflow created, goal received)
-- Intermediate states (information gathering, validation, preparation, submission, monitoring, follow-up)
-- A verification state (independent verification in progress)
-- A completed state (only reachable after successful verification)
-- Failure states
-- Escalation state(s)
+| State | Description | Terminal? |
+|---|---|---|
+| `INITIATED` | Case created; goal received; agent initialized | No |
+| `GATHERING_INFORMATION` | Agent retrieving patient, insurance, requirements, and documents | No |
+| `VALIDATING` | Deterministic validation running over gathered information | No |
+| `PREPARING_SUBMISSION` | Submission package assembled; pre-submission safety gate running | No |
+| `SUBMITTED` | Request submitted; submission reference received | No |
+| `MONITORING` | Agent polling the authorization portal for a decision | No |
+| `FOLLOW_UP_REQUIRED` | Insurer requested additional information | No |
+| `VERIFYING` | Independent verification of claimed final outcome in progress | No |
+| `ESCALATED` | Human escalation triggered; workflow paused. Resumable. | No |
+| `COMPLETED` | Authorization confirmed. Only reachable from `VERIFYING` via VerificationProvider CONFIRMED. | YES |
+| `DENIED` | Authorization denied after verification and/or human review | YES |
+| `FAILED` | Unrecoverable failure — exhausted retries or irresolvable error | YES |
+
+**Key constraint:** `COMPLETED` is only reachable from `VERIFYING` with a VerificationProvider result of CONFIRMED + approved. No other transition may lead to `COMPLETED`. This is the architectural enforcement of the DONE principle (PRS §7).
+
+See `docs/architecture/ARCHITECTURE_DECISIONS.md` AD-013 for the full transition graph and prohibited transitions.
 
 ---
 
@@ -1386,7 +1394,8 @@ Synthetic Policy Documents (source documents)
     ↓ offline processing (document ingestion pipeline)
 Text Chunking
     ↓
-Embedding Generation (Amazon Bedrock embedding model — model to be specified)
+Embedding Generation (Amazon Titan Text Embeddings V2 — model ID: amazon.titan-embed-text-v2:0)
+                     Vector dimension: 1024 (resolved in AD-015, Phase 0C)
     ↓
 pgvector (stored in PostgreSQL)
     ↓
@@ -1418,8 +1427,15 @@ Agent receives structured authorization requirements
 
 ### 15.5 Embedding Model
 
-The specific embedding model to be used will be defined in the RAG implementation specification.
-The choice must be compatible with Amazon Bedrock and pgvector.
+Resolved in AD-015 (Phase 0C).
+
+**Selected model:** Amazon Titan Text Embeddings V2
+**Bedrock model ID:** `amazon.titan-embed-text-v2:0`
+**Embedding dimensions:** 1024
+**pgvector column definition:** `VECTOR(1024)` — this constraint is fixed at schema creation time.
+**Access:** Via the existing Amazon Bedrock boto3 client (no additional service or library required).
+
+This is a first-party Amazon Bedrock model requiring no additional API keys beyond the IAM role established for Bedrock Claude access.
 
 ---
 
@@ -1446,10 +1462,15 @@ disrupting existing clients.
 
 ### 16.4 Authentication Boundary
 
-Authentication will be specified in a later phase. The API layer is responsible for
-enforcing authentication (all routes that access HealthFlow data must require authentication).
+Resolved in AD-011 (Phase 0C). The HealthFlow MVP API uses **JWT Bearer Token** authentication.
 
-Authentication details are NOT invented at this phase.
+- All routes that access HealthFlow workflow data require a valid Bearer token in the `Authorization: Bearer <token>` header.
+- Tokens are issued by the FastAPI application upon successful credential validation.
+- Tokens are stateless (no server-side session store required).
+- Token signing uses a secret key managed via AWS Secrets Manager (production) or environment variable (local development).
+- Unauthenticated routes (e.g., `/health`) are the explicit exception; all other routes are authenticated by default.
+- **Single user role for MVP:** Any authenticated user may initiate and monitor workflows. Workflow-state-level permission enforcement belongs to the safety layer, not to the authentication layer.
+- The authenticated user identity is passed as a typed value to the application layer.
 
 ### 16.5 Authorization Boundary
 

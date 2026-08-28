@@ -1,7 +1,7 @@
 # HealthFlow — Requirements Traceability
 
-**Version:** 1.0
-**Phase:** 0B — Technical Architecture Specification
+**Version:** 1.1
+**Phase:** Updated in Phase 0C — Architecture Decision Resolution
 **Authority:** Product Requirements Specification v1.0
 
 This document maps each major section of the Product Requirements Specification to the
@@ -10,7 +10,7 @@ architecture sections and decisions that satisfy it.
 Legend:
 - **SATISFIED** — The architecture explicitly addresses this requirement.
 - **DEFERRED TO LATER PHASE** — The requirement is acknowledged but its implementation
-  design requires a later specification phase (schema, API contract, auth, workflow states, etc.).
+  design requires a later specification phase (schema, API contract, data labeling, etc.).
 - **PENDING APPROVAL** — An architectural decision is needed that cannot be made
   from the current specification.
 
@@ -75,18 +75,18 @@ Legend:
 |---|---|---|---|
 | 1. Understand the authorization goal | §7 Agent Boundary, §12 Step 1 | Agent receives workflow context and reasons over the goal. | SATISFIED |
 | 2. Determine required information | §7 Agent Boundary, §12 Steps 2–5 | Agent selects tools to gather information; application layer provides results. | SATISFIED |
-| 3. Retrieve through controlled tools | §7.5 Tool Invocation Path, §6 Ports and Adapters | All retrieval is through authorized tool functions → application layer → port interfaces. | SATISFIED |
+| 3. Retrieve through controlled tools | §7.5 Tool Invocation Path, §6 Ports and Adapters, AD-014 | All retrieval is through the 9 finalized authorized tool functions → application layer → port interfaces. | SATISFIED |
 | 4. Identify missing or inconsistent information | §12 Step 6, §8 Safety Flow (step 3) | Validation step identifies missing and inconsistent data before proceeding. | SATISFIED |
-| 5. Gather supporting documentation | §6.4 DocumentRepository, §12 Step 5 | DocumentRepository port retrieves required documents. | SATISFIED |
-| 6. Validate before use | §8 Safety Architecture (steps 1–3), §12 Step 6 | Deterministic validation runs before any action proceeds. | SATISFIED |
+| 5. Gather supporting documentation | §6.4 DocumentRepository, §12 Step 5, AD-014 `get_required_document` | DocumentRepository port retrieves required documents; tool contract finalized in AD-014. | SATISFIED |
+| 6. Validate before use | §8 Safety Architecture (steps 1–3), §12 Step 6, AD-014 `validate_authorization_package` | Deterministic validation runs before any action proceeds; tool contract finalized in AD-014. | SATISFIED |
 | 7. Prepare the authorization request | §12 Step 7, §2.3 Application Layer | Application layer (not the LLM) prepares the submission package deterministically. | SATISFIED |
 | 8. Pass required safety checks | §8 Safety Flow (step 4 Safety Gate), §12 Step 8 | Safety gate must pass before submission. | SATISFIED |
-| 9. Submit through simulated authorization system | §6.5 AuthorizationGateway, §12 Step 9 | AuthorizationGateway port submits to the synthetic portal. | SATISFIED |
-| 10. Monitor request status | §6.6 AuthorizationStatusGateway, §12 Step 10 | Agent uses status tool; application queries AuthorizationStatusGateway. | SATISFIED |
-| 11. Handle permitted routine follow-up | §12 Step 11, §20 Error/Failure Architecture | Follow-up on additional-information requests is handled; policy defined in later phase. | DEFERRED TO LATER PHASE (exact follow-up rules) |
-| 12. Detect additional-information requests | §20 Error/Failure Table (additional-information row), §12 Step 11 | Detected through status monitoring and classified as a workflow continuation path. | SATISFIED |
-| 13. Escalate situations requiring human judgment | §5.9 Escalation domain, §8 Safety Flow, §17.6 Human Escalation UI | Escalation is a first-class domain concept with UI support. | SATISFIED |
-| 14. Independently verify final outcome | §6.7 VerificationProvider, §12 Step 12, AD-004 | VerificationProvider port enforces independent verification via a separate access path. | SATISFIED |
+| 9. Submit through simulated authorization system | §6.5 AuthorizationGateway, §12 Step 9, AD-014 `submit_authorization_request` | AuthorizationGateway port submits to the synthetic portal; tool contract finalized in AD-014. | SATISFIED |
+| 10. Monitor request status | §6.6 AuthorizationStatusGateway, §12 Step 10, AD-014 `get_authorization_status` | Agent uses status tool; application queries AuthorizationStatusGateway. Tool contract finalized. | SATISFIED |
+| 11. Handle permitted routine follow-up | §12 Step 11, §20 Error/Failure Architecture, AD-013 `FOLLOW_UP_REQUIRED` state | Follow-up state defined in AD-013; exact re-submission rules are covered by retry policy AD-012. | SATISFIED |
+| 12. Detect additional-information requests | §20 Error/Failure Table, AD-014 `get_authorization_status` (status: ADDITIONAL_INFO_REQUIRED) | Status value `ADDITIONAL_INFO_REQUIRED` triggers `FOLLOW_UP_REQUIRED` state transition per AD-013. | SATISFIED |
+| 13. Escalate situations requiring human judgment | §5.9 Escalation domain, §8 Safety Flow, §17.6 Human Escalation UI, AD-014 `request_escalation` | Escalation is a first-class domain concept, workflow state, and finalized tool. | SATISFIED |
+| 14. Independently verify final outcome | §6.7 VerificationProvider, §12 Step 12, AD-004, AD-014 `verify_authorization_outcome` | Tool contract finalized. Only this tool can authorize transition to `COMPLETED` per AD-013. | SATISFIED |
 
 ---
 
@@ -201,11 +201,11 @@ Legend:
 | Agent: AWS Strands Agents SDK | §2.6 Agent Layer, §4.3 services/agent | Technology designated for services/agent. | SATISFIED |
 | LLM: Claude via Amazon Bedrock | §2.6, §4.3 | Designated in agent layer architecture. | SATISFIED |
 | Database: PostgreSQL, SQLAlchemy 2.x, Alembic | §14 Database Architecture, §4.6 packages/infrastructure | Technology designated for infrastructure layer. | SATISFIED |
-| Vector: pgvector | §15 RAG Architecture, AD-007 | pgvector designated for policy retrieval pipeline. | SATISFIED |
+| Vector: pgvector | §15 RAG Architecture, AD-007, AD-015 | pgvector designated for policy retrieval pipeline; dimension fixed at 1024 per AD-015. | SATISFIED |
 | Testing tools | §4.9–§4.14 | All testing tools designated for their respective test layers. | SATISFIED |
 | Code quality tools | §4.4–§4.7 | Ruff, MyPy, ESLint, Prettier designated; configuration deferred to implementation phase. | DEFERRED TO LATER PHASE (configuration) |
 | Infrastructure: Docker, Docker Compose, AWS | §4.18 docker, AD-010 | Infrastructure designated; configuration deferred to infrastructure phase. | DEFERRED TO LATER PHASE (configuration) |
-| Potential AWS services | AD-010 | All 8 listed services are designated in AD-010 with their purpose. | SATISFIED |
+| Potential AWS services | AD-010, AD-015 | All 8 listed services designated in AD-010; embedding model selection via Bedrock in AD-015. | SATISFIED |
 
 ---
 
@@ -215,13 +215,13 @@ Legend:
 |---|---|---|---|
 | SOLID principles | §3 Dependency Direction, §2 Layer Responsibilities | Single responsibility (each layer has one responsibility), open/closed (new workflows extend, not modify), dependency inversion (ports and adapters). | SATISFIED |
 | Clean architecture | §1 System Overview, §2 Layer Responsibilities, AD-001 | Full clean architecture with layered, inward dependencies. | SATISFIED |
-| Separation of concerns | §2 Layer Responsibilities (each layer's must NOT section) | Each layer's prohibited actions enforce separation. | SATISFIED |
+| Separation of concerns | §2 Layer Responsibilities (each layer’s must NOT section) | Each layer’s prohibited actions enforce separation. | SATISFIED |
 | Dependency inversion | §3 Dependency Direction, AD-001 | Domain defines ports; infrastructure implements them. | SATISFIED |
 | Ports and adapters | §6 Ports and Adapters, AD-006 | All external system interactions are mediated by port interfaces. | SATISFIED |
-| Explicit workflow state | §11 Workflow State Architecture, AD-005 | State is explicit, named, and persisted. | SATISFIED |
+| Explicit workflow state | §11 Workflow State Architecture, AD-005, AD-013 | 12 named states with full transition graph defined in AD-013. | SATISFIED |
 | Deterministic validation | §8 Safety Architecture, AD-003 | Validation is in deterministic code. | SATISFIED |
-| Independent verification | §6.7 VerificationProvider, AD-004 | Separate port, separate access path. | SATISFIED |
-| Least privilege | §19.1, §22.5 | Least privilege at agent tool level and infrastructure IAM level. | SATISFIED |
+| Independent verification | §6.7 VerificationProvider, AD-004, AD-014 | Separate port, separate access path, finalized tool `verify_authorization_outcome`. | SATISFIED |
+| Least privilege | §19.1, §22.5 | Defined for both agent tool access (per AD-014 permission codes) and infrastructure IAM level. | SATISFIED |
 | Testability | §4.9–§4.14, §2 Layer Responsibilities | All layers are designed for isolation and testability via port injection. | SATISFIED |
 | Observability | §18 Observability Architecture | Comprehensive observability architecture defined. | SATISFIED |
 | Loose coupling | §3 Dependency Direction, §6 Ports and Adapters | Layers communicate through interfaces; infrastructure is replaceable. | SATISFIED |
@@ -274,16 +274,16 @@ Legend:
 |---|---|---|---|
 | 1. Synthetic case created | §12 Step 1, §14 Database Architecture | Authorization case created in PostgreSQL at workflow initiation. | SATISFIED |
 | 2. Agent understands the goal | §7 Agent Boundary, §12 Step 1 | Agent receives goal and reasons over it. | SATISFIED |
-| 3. Agent retrieves via controlled tools | §7.5 Tool Invocation Path | All retrieval through authorized tools via application layer. | SATISFIED |
-| 4. Deterministic validation | §8 Safety Architecture | Mandatory validation step in safety flow. | SATISFIED |
+| 3. Agent retrieves via controlled tools | §7.5 Tool Invocation Path, AD-014 | 9 finalized authorized tool functions; all retrieval is mediated. | SATISFIED |
+| 4. Deterministic validation | §8 Safety Architecture, AD-014 `validate_authorization_package` | Mandatory validation step in safety flow; tool contract finalized. | SATISFIED |
 | 5. Authorization request prepared | §12 Step 7 | Application layer prepares submission deterministically. | SATISFIED |
-| 6. Request submitted to simulated system | §6.5 AuthorizationGateway, §12 Step 9 | AuthorizationGateway port submits to synthetic portal. | SATISFIED |
-| 7. Workflow can be monitored | §18 Observability, §17.5 Workflow Timeline | Observability architecture and frontend timeline support monitoring. | SATISFIED |
-| 8. Permitted follow-up performed | §12 Step 11, §20 | Follow-up path is defined; exact rules deferred. | DEFERRED TO LATER PHASE |
-| 9. Critical situations escalated | §5.9 Escalation, §8 Safety Flow | Escalation is a first-class state; all escalation triggers covered. | SATISFIED |
-| 10. Final outcome independently verified | §6.7 VerificationProvider, AD-004 | Verification is a mandatory final step. | SATISFIED |
-| 11. Never claims completion without verification | §7.4, §8 Safety Flow step 6, §22.2 | Architecture prohibits completion without VerificationProvider CONFIRMED. | SATISFIED |
-| 12. Workflow observable and testable | §18 Observability, §4.9–§4.14 tests | Observability and test architecture cover all required events. | SATISFIED |
+| 6. Request submitted to simulated system | §6.5 AuthorizationGateway, §12 Step 9, AD-014 `submit_authorization_request` | AuthorizationGateway port submits to synthetic portal; tool contract finalized. | SATISFIED |
+| 7. Workflow can be monitored | §18 Observability, §17.5 Workflow Timeline, AD-013 | 12 named states provide a full observable timeline. | SATISFIED |
+| 8. Permitted follow-up performed | §12 Step 11, §20, AD-013 `FOLLOW_UP_REQUIRED` state, AD-012 retry policy | Follow-up state defined; retry policy for re-submission defined. | SATISFIED |
+| 9. Critical situations escalated | §5.9 Escalation, §8 Safety Flow, AD-013 `ESCALATED` state, AD-014 `request_escalation` | Escalation is a first-class state and finalized tool. | SATISFIED |
+| 10. Final outcome independently verified | §6.7 VerificationProvider, AD-004, AD-014 `verify_authorization_outcome` | Verification is a mandatory final step; tool contract finalized. | SATISFIED |
+| 11. Never claims completion without verification | §7.4, §8 Safety Flow step 6, §22.2, AD-013 | `COMPLETED` is only reachable from `VERIFYING` via VerificationProvider CONFIRMED. | SATISFIED |
+| 12. Workflow observable and testable | §18 Observability, §4.9–§4.14 tests, AD-013 | 12 named states, audit per transition, full test suite directories. | SATISFIED |
 
 ---
 
