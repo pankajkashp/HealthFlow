@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=70.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthflow-domain"
+version = "0.1.0"
+description = "HealthFlow domain layer — business concepts, port interfaces, and domain rules."
+requires-python = ">=3.13"
+# The domain layer has NO external dependencies by design.
+# It must remain framework-independent (no FastAPI, SQLAlchemy, Strands, boto3).
+# Ref: docs/architecture/ARCHITECTURE.md §2.4, §3.2
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]

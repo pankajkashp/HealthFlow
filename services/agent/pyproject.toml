@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=70.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthflow-agent"
+version = "0.1.0"
+description = "HealthFlow agent service — AWS Strands Agents SDK runtime and Claude LLM integration."
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]

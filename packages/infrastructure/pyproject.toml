@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=70.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthflow-infrastructure"
+version = "0.1.0"
+description = "HealthFlow infrastructure layer — port implementations, database adapters, and simulated system adapters."
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]

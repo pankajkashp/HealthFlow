@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=70.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthflow-application"
+version = "0.1.0"
+description = "HealthFlow application layer — use cases, workflow orchestration, and agent tool definitions."
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
