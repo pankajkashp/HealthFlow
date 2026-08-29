@@ -1,13 +1,24 @@
-"""HealthFlow agent service.
+"""HealthFlow Agent Service.
 
-This package hosts the AWS Strands Agents SDK runtime and Claude LLM integration.
-The agent is a reasoning component that invokes authorized application-layer tool functions only.
-
-Architecture position: Agent layer (services/agent).
-Production dependencies: AWS Strands Agents SDK, boto3 Bedrock Runtime client.
-
-PHASE 1 NOTE: Agent implementation is NOT in scope for Phase 1.
-Strands SDK, Claude, and Bedrock dependencies are added in the agent implementation phase.
+This package hosts the AWS Strands Agents SDK runtime, Claude LLM integration via Amazon Bedrock,
+and the administrative MRI prior-authorization reasoning loop.
 
 Ref: docs/architecture/ARCHITECTURE.md §2.6, §7
+Ref: docs/architecture/ARCHITECTURE_DECISIONS.md AD-014
 """
+
+from healthflow_agent.agent import (
+    AgentExecutionTrace,
+    HealthFlowAgent,
+    ToolExecutionRecord,
+)
+from healthflow_agent.config import AgentConfig
+from healthflow_agent.prompts import HEALTHFLOW_SYSTEM_PROMPT
+
+__all__ = [
+    "HEALTHFLOW_SYSTEM_PROMPT",
+    "AgentConfig",
+    "AgentExecutionTrace",
+    "HealthFlowAgent",
+    "ToolExecutionRecord",
+]
