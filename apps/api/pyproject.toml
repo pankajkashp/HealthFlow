@@ -11,9 +11,6 @@ dependencies = [
     "fastapi>=0.115.0,<1.0.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",
     "pydantic>=2.7.0,<3.0.0",
-    "healthflow-domain",
-    "healthflow-application",
-    "healthflow-infrastructure",
 ]
 
 [project.optional-dependencies]
