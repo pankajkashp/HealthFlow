@@ -1,9 +1,10 @@
 """HealthFlow Domain Ports & Repository Interfaces.
 
-Defines repository and Unit of Work interfaces as typing.Protocols.
-Infrastructure adapters implement these interfaces; the application layer uses them.
+Defines repository and Unit of Work interfaces, as well as external system
+ports (EHR, Payer, Document Store, Authorization Portal, Verification Provider)
+as typing.Protocols.
 
-Ref: docs/architecture/ARCHITECTURE.md §6, §14
+Ref: docs/architecture/ARCHITECTURE.md §6, §13, §14
 """
 
 from collections.abc import Sequence
@@ -19,6 +20,18 @@ from healthflow_domain.entities import (
     VerificationRecord,
     WorkflowTransition,
 )
+from healthflow_domain.enums import ProcedureType
+from healthflow_domain.external_models import (
+    DocumentContent,
+    DocumentMetadata,
+    EhrPatientRecord,
+    ExternalVerificationResult,
+    PayerCoverageRecord,
+    PortalStatusRecord,
+    PortalSubmissionAck,
+    PortalSubmissionPayload,
+    ProcedureRequirements,
+)
 from healthflow_domain.identifiers import (
     CaseId,
     EscalationId,
@@ -30,7 +43,7 @@ from healthflow_domain.identifiers import (
 
 
 class PatientRepository(Protocol):
-    """Port for retrieving and saving synthetic patient records."""
+    """Port for retrieving and saving synthetic patient records in internal database."""
 
     def get_by_id(self, patient_id: PatientId) -> Patient | None: ...
 
@@ -40,7 +53,7 @@ class PatientRepository(Protocol):
 
 
 class InsurancePlanRepository(Protocol):
-    """Port for retrieving and saving insurance plan records."""
+    """Port for retrieving and saving insurance plan records in internal database."""
 
     def get_by_id(self, plan_id: PlanId) -> InsurancePlan | None: ...
 
@@ -130,3 +143,64 @@ class UnitOfWork(Protocol):
     def commit(self) -> None: ...
 
     def rollback(self) -> None: ...
+
+
+# ==============================================================================
+# External System Ports (Phase 3)
+# ==============================================================================
+
+
+class EhrPort(Protocol):
+    """Port for interacting with external Electronic Health Record system."""
+
+    def get_patient_record(self, patient_id: PatientId) -> EhrPatientRecord | None: ...
+
+    def get_clinical_history(self, patient_id: PatientId) -> Sequence[str]: ...
+
+
+class PayerPort(Protocol):
+    """Port for interacting with external insurance payer system."""
+
+    def get_coverage_status(
+        self, patient_id: PatientId, plan_id: PlanId
+    ) -> PayerCoverageRecord | None: ...
+
+    def get_prior_auth_requirements(
+        self, plan_id: PlanId, procedure_type: ProcedureType
+    ) -> ProcedureRequirements | None: ...
+
+
+class DocumentStorePort(Protocol):
+    """Port for retrieving clinical documentation from external document store."""
+
+    def get_document_metadata(
+        self, document_reference: str
+    ) -> DocumentMetadata | None: ...
+
+    def get_document_content(
+        self, document_reference: str
+    ) -> DocumentContent | None: ...
+
+
+class AuthorizationGatewayPort(Protocol):
+    """Port for submitting requests to external authorization portal (Mutating)."""
+
+    def submit_authorization(
+        self, payload: PortalSubmissionPayload
+    ) -> PortalSubmissionAck: ...
+
+
+class AuthorizationStatusGatewayPort(Protocol):
+    """Port for querying current status from external authorization portal."""
+
+    def get_submission_status(
+        self, submission_reference: str
+    ) -> PortalStatusRecord | None: ...
+
+
+class VerificationProviderPort(Protocol):
+    """Port for independently verifying outcome via a separate access path (AD-004)."""
+
+    def verify_outcome(
+        self, submission_reference: str, expected_status: str
+    ) -> ExternalVerificationResult: ...

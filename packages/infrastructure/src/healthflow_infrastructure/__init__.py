@@ -1,8 +1,9 @@
 """HealthFlow Infrastructure Layer.
 
-PostgreSQL persistence adapters, SQLAlchemy 2.x ORM models, and repository implementations.
+PostgreSQL persistence adapters, SQLAlchemy 2.x ORM models, repository implementations,
+and simulated external healthcare systems.
 
-Ref: docs/architecture/ARCHITECTURE.md §2.5, §14
+Ref: docs/architecture/ARCHITECTURE.md §2.5, §13, §14
 """
 
 from healthflow_infrastructure.database import (
@@ -32,8 +33,23 @@ from healthflow_infrastructure.repositories import (
     PostgresVerificationRepository,
     PostgresWorkflowStateRepository,
 )
+from healthflow_infrastructure.simulators import (
+    ALL_BENCHMARK_FIXTURES,
+    SimulatorScenario,
+    SyntheticAuthorizationGatewayAdapter,
+    SyntheticAuthorizationPortalSimulator,
+    SyntheticAuthorizationStatusAdapter,
+    SyntheticDocumentStoreAdapter,
+    SyntheticDocumentStoreSimulator,
+    SyntheticEhrAdapter,
+    SyntheticEhrSimulator,
+    SyntheticPayerAdapter,
+    SyntheticPayerSimulator,
+    SyntheticVerificationAdapter,
+)
 
 __all__ = [
+    "ALL_BENCHMARK_FIXTURES",
     "AuditRecordModel",
     "AuthorizationCaseModel",
     "Base",
@@ -49,7 +65,18 @@ __all__ = [
     "PostgresUnitOfWork",
     "PostgresVerificationRepository",
     "PostgresWorkflowStateRepository",
+    "SimulatorScenario",
     "SubmissionRecordModel",
+    "SyntheticAuthorizationGatewayAdapter",
+    "SyntheticAuthorizationPortalSimulator",
+    "SyntheticAuthorizationStatusAdapter",
+    "SyntheticDocumentStoreAdapter",
+    "SyntheticDocumentStoreSimulator",
+    "SyntheticEhrAdapter",
+    "SyntheticEhrSimulator",
+    "SyntheticPayerAdapter",
+    "SyntheticPayerSimulator",
+    "SyntheticVerificationAdapter",
     "VerificationRecordModel",
     "WorkflowTransitionModel",
     "create_db_engine",
