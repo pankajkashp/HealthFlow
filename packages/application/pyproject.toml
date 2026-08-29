@@ -9,6 +9,7 @@ description = "HealthFlow application layer — use cases, workflow orchestratio
 requires-python = ">=3.13"
 dependencies = [
     "healthflow-domain",
+    "healthflow-safety",
     "healthflow-shared",
 ]
 

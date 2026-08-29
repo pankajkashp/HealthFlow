@@ -1,23 +1,27 @@
 """HealthFlow Application Agent Tools.
 
 Implements the exact 9 approved tools defined in ARCHITECTURE_DECISIONS.md AD-014
-and ARCHITECTURE.md §7.2.
+and ARCHITECTURE.md §7.2, guarded by the deterministic safety layer (packages/safety).
 
 Every tool:
 - Is defined in the application layer.
-- Enforces strict input validation and boundary checks.
+- Enforces strict input validation and boundary checks via packages/safety.
+- Enforces state-based permission authorization via packages/safety.
+- Enforces pre-action safety gates before consequential operations.
+- Implements AD-012 retry policies and failure classification.
+- Evaluates outcome verification through the independent verification engine.
 - Returns a strongly-typed, structured result object (never raises raw exceptions).
 - Routes to domain ports and application services.
 - Never directly accesses PostgreSQL or simulator internals.
 
-Ref: docs/architecture/ARCHITECTURE_DECISIONS.md AD-014
-Ref: docs/architecture/ARCHITECTURE.md §7.2
+Ref: docs/architecture/ARCHITECTURE_DECISIONS.md AD-011, AD-012, AD-013, AD-014
+Ref: docs/architecture/ARCHITECTURE.md §7.2, §8
+Ref: docs/product/PRODUCT_REQUIREMENTS.md §7, §8, §10, §11, §16, §21
 """
 
 import uuid
-from typing import Final
 
-from healthflow_domain.enums import ProcedureType
+from healthflow_domain.enums import ProcedureType, WorkflowState
 from healthflow_domain.external_models import PortalSubmissionPayload
 from healthflow_domain.identifiers import PatientId, PlanId
 from healthflow_domain.ports import (
@@ -29,6 +33,23 @@ from healthflow_domain.ports import (
     UnitOfWork,
     VerificationProviderPort,
 )
+from healthflow_safety import (
+    ALLOWED_ESCALATION_REASONS,
+    ALLOWED_PROCEDURE_PREFIX,
+    UserRole,
+    check_action_permission,
+    evaluate_pre_submission_safety_gate,
+    evaluate_retry_decision,
+    evaluate_verification_outcome,
+    validate_document_reference,
+    validate_escalation_inputs,
+    validate_patient_identifier,
+    validate_plan_identifier,
+    validate_procedure_type,
+    validate_verification_inputs,
+)
+
+__all__ = ["ALLOWED_ESCALATION_REASONS", "ALLOWED_PROCEDURE_PREFIX", "AgentTools"]
 
 from healthflow_application.tool_models import (
     AuthorizationRequirementsResult,
@@ -42,23 +63,9 @@ from healthflow_application.tool_models import (
     VerificationResult,
 )
 
-# Allowed procedure types for the MVP
-ALLOWED_PROCEDURE_PREFIX: Final[str] = "MRI"
-
-# Allowed escalation reason codes per AD-014
-ALLOWED_ESCALATION_REASONS: Final[set[str]] = {
-    "VALIDATION_CONFLICT",
-    "VERIFICATION_FAILED",
-    "SAFETY_GATE_FAILED",
-    "INFORMATION_UNRESOLVABLE",
-    "PERMISSION_EXCEEDED",
-    "PORTAL_ERROR",
-    "UNSUPPORTED_PROCEDURE",
-}
-
 
 class AgentTools:
-    """Encapsulates the 9 approved agent tools wired to application ports."""
+    """Encapsulates the 9 approved agent tools wired to application ports and safety gates."""
 
     def __init__(
         self,
@@ -69,6 +76,8 @@ class AgentTools:
         status_gateway_port: AuthorizationStatusGatewayPort,
         verification_port: VerificationProviderPort,
         uow: UnitOfWork | None = None,
+        workflow_state: WorkflowState | str = WorkflowState.PREPARING_SUBMISSION,
+        actor_role: UserRole | str = UserRole.AGENT,
     ) -> None:
         self._ehr = ehr_port
         self._payer = payer_port
@@ -77,6 +86,24 @@ class AgentTools:
         self._status_gateway = status_gateway_port
         self._verification = verification_port
         self._uow = uow
+        self._workflow_state = (
+            workflow_state
+            if isinstance(workflow_state, WorkflowState)
+            else WorkflowState(workflow_state)
+        )
+        self._actor_role = (
+            actor_role if isinstance(actor_role, UserRole) else UserRole(actor_role)
+        )
+
+    def set_workflow_state(self, state: WorkflowState | str) -> None:
+        """Update active workflow state for permission evaluations."""
+        self._workflow_state = (
+            state if isinstance(state, WorkflowState) else WorkflowState(state)
+        )
+
+    @property
+    def workflow_state(self) -> WorkflowState:
+        return self._workflow_state
 
     # --------------------------------------------------------------------------
     # Tool 1: get_patient_record
@@ -86,35 +113,67 @@ class AgentTools:
 
         Permission: WORKFLOW_READ. Read only.
         """
-        if not patient_identifier or not patient_identifier.strip():
+        # 1. Deterministic Input Validation
+        val = validate_patient_identifier(patient_identifier)
+        if not val.is_valid:
             return PatientRecordResult(
                 success=False,
-                error_code="INVALID_IDENTIFIER",
-                error_message="Patient identifier must not be empty.",
+                error_code=val.error_code,
+                error_message=val.error_message,
             )
 
-        clean_id = patient_identifier.strip()
-        record = self._ehr.get_patient_record(PatientId(clean_id))
-        if record is None:
+        # 2. Permission Check
+        perm = check_action_permission(
+            "get_patient_record", self._workflow_state, self._actor_role
+        )
+        if not perm.allowed:
             return PatientRecordResult(
                 success=False,
-                error_code="PATIENT_NOT_FOUND",
-                error_message=f"Patient record '{clean_id}' not found or EHR system unavailable.",
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
             )
 
-        if not record.is_synthetic:
-            return PatientRecordResult(
-                success=False,
-                error_code="DATA_BOUNDARY_VIOLATION",
-                error_message="Non-synthetic patient record detected. Ingestion rejected.",
+        clean_id = str(val.sanitized_value)
+
+        # 3. Execution with AD-012 Category 1 Retry Loop
+        attempt = 1
+        last_error_code = "PATIENT_NOT_FOUND"
+        last_error_msg = (
+            f"Patient record '{clean_id}' not found or EHR system unavailable."
+        )
+
+        while True:
+            record = self._ehr.get_patient_record(PatientId(clean_id))
+            if record is not None:
+                if not record.is_synthetic:
+                    return PatientRecordResult(
+                        success=False,
+                        error_code="DATA_BOUNDARY_VIOLATION",
+                        error_message="Non-synthetic patient record detected. Ingestion rejected.",
+                    )
+                return PatientRecordResult(
+                    success=True,
+                    patient_id=record.patient_id,
+                    name_reference=record.name_reference,
+                    ehr_reference=record.ehr_reference,
+                    is_synthetic=True,
+                )
+
+            # Evaluate retry per AD-012
+            retry_dec = evaluate_retry_decision(
+                "get_patient_record",
+                current_attempt=attempt,
+                error_code=last_error_code,
+                is_transient=True,
             )
+            if not retry_dec.should_retry:
+                break
+            attempt = retry_dec.attempt
 
         return PatientRecordResult(
-            success=True,
-            patient_id=record.patient_id,
-            name_reference=record.name_reference,
-            ehr_reference=record.ehr_reference,
-            is_synthetic=True,
+            success=False,
+            error_code=last_error_code,
+            error_message=last_error_msg,
         )
 
     # --------------------------------------------------------------------------
@@ -125,16 +184,29 @@ class AgentTools:
 
         Permission: WORKFLOW_READ. Read only.
         """
-        if not patient_id or not patient_id.strip():
+        # 1. Deterministic Input Validation
+        val = validate_patient_identifier(patient_id)
+        if not val.is_valid:
             return InsurancePlanResult(
                 success=False,
-                error_code="INVALID_PATIENT_ID",
-                error_message="Patient ID must not be empty.",
+                error_code="INVALID_PATIENT_ID"
+                if val.error_code == "INVALID_IDENTIFIER"
+                else val.error_code,
+                error_message=val.error_message,
             )
 
-        clean_pid = patient_id.strip()
-        # Find active plan for the patient across known synthetic plan fixtures
-        # In MVP, plans are indexed by plan prefix matching patient
+        # 2. Permission Check
+        perm = check_action_permission(
+            "get_insurance_plan", self._workflow_state, self._actor_role
+        )
+        if not perm.allowed:
+            return InsurancePlanResult(
+                success=False,
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
+            )
+
+        clean_pid = str(val.sanitized_value)
         potential_plans = [
             f"plan_{clean_pid.replace('pat_', '')}",
             "plan_bcbs_001",
@@ -145,16 +217,30 @@ class AgentTools:
             "plan_kaiser_006",
         ]
 
-        for p_id in potential_plans:
-            cov = self._payer.get_coverage_status(PatientId(clean_pid), PlanId(p_id))
-            if cov is not None:
-                return InsurancePlanResult(
-                    success=True,
-                    plan_id=cov.plan_id,
-                    insurer_reference=cov.insurer_name,
-                    plan_type="PPO" if cov.in_network else "OUT_OF_NETWORK",
-                    member_reference=f"MEM-{clean_pid.upper()}",
+        attempt = 1
+        while True:
+            for p_id in potential_plans:
+                cov = self._payer.get_coverage_status(
+                    PatientId(clean_pid), PlanId(p_id)
                 )
+                if cov is not None:
+                    return InsurancePlanResult(
+                        success=True,
+                        plan_id=cov.plan_id,
+                        insurer_reference=cov.insurer_name,
+                        plan_type="PPO" if cov.in_network else "OUT_OF_NETWORK",
+                        member_reference=f"MEM-{clean_pid.upper()}",
+                    )
+
+            retry_dec = evaluate_retry_decision(
+                "get_insurance_plan",
+                current_attempt=attempt,
+                error_code="PLAN_NOT_FOUND",
+                is_transient=False,
+            )
+            if not retry_dec.should_retry:
+                break
+            attempt = retry_dec.attempt
 
         return InsurancePlanResult(
             success=False,
@@ -172,26 +258,40 @@ class AgentTools:
 
         Permission: WORKFLOW_READ. Read only.
         """
-        if not plan_id or not plan_id.strip():
+        # 1. Deterministic Input Validation
+        val_plan = validate_plan_identifier(plan_id)
+        if not val_plan.is_valid:
             return AuthorizationRequirementsResult(
                 success=False,
-                error_code="INVALID_PLAN_ID",
-                error_message="Plan ID must not be empty.",
+                error_code=val_plan.error_code,
+                error_message=val_plan.error_message,
             )
 
-        if not procedure_type or not procedure_type.strip().upper().startswith(
-            ALLOWED_PROCEDURE_PREFIX
-        ):
+        val_proc = validate_procedure_type(procedure_type)
+        if not val_proc.is_valid:
             return AuthorizationRequirementsResult(
                 success=False,
-                error_code="UNSUPPORTED_PROCEDURE",
-                error_message=f"Only procedure types starting with '{ALLOWED_PROCEDURE_PREFIX}' are supported in MVP.",
+                error_code=val_proc.error_code,
+                error_message=val_proc.error_message,
             )
 
-        clean_plan_id = plan_id.strip()
-        # Try matching procedure type to enum
+        # 2. Permission Check
+        perm = check_action_permission(
+            "get_authorization_requirements",
+            self._workflow_state,
+            self._actor_role,
+        )
+        if not perm.allowed:
+            return AuthorizationRequirementsResult(
+                success=False,
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
+            )
+
+        clean_plan_id = str(val_plan.sanitized_value)
+        norm_proc = str(val_proc.sanitized_value)
+
         proc_enum = ProcedureType.MRI_LUMBAR_SPINE
-        norm_proc = procedure_type.strip().upper()
         if "LUMBAR" in norm_proc:
             proc_enum = ProcedureType.MRI_LUMBAR_SPINE
         elif "KNEE" in norm_proc:
@@ -230,14 +330,29 @@ class AgentTools:
         Note per AD-014: Raw document content is NOT returned to the agent.
         Permission: WORKFLOW_READ. Read only.
         """
-        if not document_reference or not document_reference.strip():
+        # 1. Deterministic Input Validation
+        val = validate_document_reference(document_reference, document_type)
+        if not val.is_valid:
             return DocumentResult(
                 success=False,
-                error_code="INVALID_DOCUMENT_REF",
-                error_message="Document reference must not be empty.",
+                error_code=val.error_code,
+                error_message=val.error_message,
             )
 
-        clean_ref = document_reference.strip()
+        # 2. Permission Check
+        perm = check_action_permission(
+            "get_required_document", self._workflow_state, self._actor_role
+        )
+        if not perm.allowed:
+            return DocumentResult(
+                success=False,
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
+            )
+
+        clean_ref = val.sanitized_value["reference"]
+        expected_type = val.sanitized_value["type"]
+
         meta = self._doc_store.get_document_metadata(clean_ref)
         if meta is None:
             return DocumentResult(
@@ -246,11 +361,11 @@ class AgentTools:
                 error_message=f"Document '{clean_ref}' not found in synthetic repository.",
             )
 
-        if document_type and meta.document_type != document_type.strip():
+        if expected_type and meta.document_type != expected_type:
             return DocumentResult(
                 success=False,
                 error_code="DOCUMENT_TYPE_MISMATCH",
-                error_message=f"Expected document type '{document_type}', found '{meta.document_type}'.",
+                error_message=f"Expected document type '{expected_type}', found '{meta.document_type}'.",
             )
 
         return DocumentResult(
@@ -281,12 +396,38 @@ class AgentTools:
         Returns is_valid=True or is_valid=False with detail lists.
         Permission: WORKFLOW_READ. Read only.
         """
+        # 1. Deterministic Input Validation
+        val_p = validate_patient_identifier(patient_id)
+        val_pl = validate_plan_identifier(plan_id)
+        if not val_p.is_valid or not val_pl.is_valid:
+            err_code = val_p.error_code if not val_p.is_valid else val_pl.error_code
+            err_msg = (
+                val_p.error_message if not val_p.is_valid else val_pl.error_message
+            )
+            return ValidationResult(
+                is_valid=False,
+                invalid_fields=[err_code or "INVALID_INPUT"],
+                validation_notes=[err_msg or ""],
+            )
+
+        # 2. Permission Check
+        perm = check_action_permission(
+            "validate_authorization_package",
+            self._workflow_state,
+            self._actor_role,
+        )
+        if not perm.allowed:
+            return ValidationResult(
+                is_valid=False,
+                conflicts=[perm.denial_reason or "PERMISSION_DENIED"],
+            )
+
         missing_fields: list[str] = []
         invalid_fields: list[str] = []
         conflicts: list[str] = []
         notes: list[str] = []
 
-        # 1. Validate Patient
+        # Validate Patient
         patient = self._ehr.get_patient_record(PatientId(patient_id))
         if patient is None:
             missing_fields.append("patient_record")
@@ -301,43 +442,42 @@ class AgentTools:
                     f"Clinical notes conflict detected: {patient.clinical_notes_summary}"
                 )
 
-        # 2. Validate Coverage
+        # Validate Coverage
         cov = self._payer.get_coverage_status(PatientId(patient_id), PlanId(plan_id))
         if cov is None or not cov.is_active:
             invalid_fields.append("inactive_or_missing_insurance_coverage")
         elif "mismatch" in cov.coverage_notes.lower():
             conflicts.append(f"Payer policy conflict: {cov.coverage_notes}")
 
-        # 3. Validate Documents
+        # Validate Documents
         if not document_ids:
             missing_fields.append("supporting_clinical_documents")
-        else:
-            # Check requirements
-            reqs = None
-            if plan_id:
-                for proc in ProcedureType:
-                    if proc.value in requirements_id:
-                        reqs = self._payer.get_prior_auth_requirements(
-                            PlanId(plan_id), proc
-                        )
-                        break
-                if reqs is None:
+
+        reqs = None
+        if plan_id:
+            for proc in ProcedureType:
+                if proc.value in requirements_id:
                     reqs = self._payer.get_prior_auth_requirements(
-                        PlanId(plan_id), ProcedureType.MRI_LUMBAR_SPINE
+                        PlanId(plan_id), proc
                     )
+                    break
+            if reqs is None:
+                reqs = self._payer.get_prior_auth_requirements(
+                    PlanId(plan_id), ProcedureType.MRI_LUMBAR_SPINE
+                )
 
-            present_doc_types: set[str] = set()
-            for doc_id in document_ids:
-                meta = self._doc_store.get_document_metadata(doc_id)
-                if meta is None:
-                    missing_fields.append(f"document:{doc_id}")
-                else:
-                    present_doc_types.add(meta.document_type)
+        present_doc_types: set[str] = set()
+        for doc_id in document_ids:
+            meta = self._doc_store.get_document_metadata(doc_id)
+            if meta is None:
+                missing_fields.append(f"document:{doc_id}")
+            else:
+                present_doc_types.add(meta.document_type)
 
-            if reqs:
-                for req_doc_type in reqs.required_document_types:
-                    if req_doc_type not in present_doc_types:
-                        missing_fields.append(f"required_document:{req_doc_type}")
+        if reqs:
+            for req_doc_type in reqs.required_document_types:
+                if req_doc_type not in present_doc_types:
+                    missing_fields.append(f"required_document:{req_doc_type}")
 
         is_valid = (
             len(missing_fields) == 0
@@ -366,22 +506,123 @@ class AgentTools:
         plan_id: str,
         requirements_id: str,
         document_ids: list[str],
+        is_retry: bool = False,
+        prior_submission_reference: str | None = None,
     ) -> SubmissionResult:
         """Submit the authorization package to the synthetic prior authorization portal.
 
+        Guarded by Pre-Action Safety Gate and AD-012 Pre-Check Retry Policy.
         Permission: WORKFLOW_SUBMIT. Mutating.
         """
-        # Pre-submission safety check: Validate package completeness first
-        val = self.validate_authorization_package(
+        # 1. Permission Check (Strictly allowed ONLY in PREPARING_SUBMISSION)
+        perm = check_action_permission(
+            "submit_authorization_request",
+            self._workflow_state,
+            self._actor_role,
+        )
+        if not perm.allowed:
+            return SubmissionResult(
+                success=False,
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
+            )
+
+        # 2. Pre-submission package validation check
+        val_pkg = self.validate_authorization_package(
             patient_id, plan_id, requirements_id, document_ids
         )
-        if not val.is_valid:
+        if not val_pkg.is_valid:
             return SubmissionResult(
                 success=False,
                 error_code="PRE_SUBMISSION_VALIDATION_FAILED",
-                error_message=f"Package failed validation prior to submission: missing={val.missing_fields}, conflicts={val.conflicts}",
+                error_message=f"Package failed validation prior to submission: missing={val_pkg.missing_fields}, conflicts={val_pkg.conflicts}",
             )
 
+        # 3. AD-012 Category 3 Submission Pre-Check Invariant
+        if is_retry:
+            if not prior_submission_reference:
+                retry_dec = evaluate_retry_decision(
+                    "submit_authorization_request",
+                    current_attempt=1,
+                    has_completed_precheck=False,
+                )
+                return SubmissionResult(
+                    success=False,
+                    error_code="SUBMISSION_PRECHECK_REQUIRED",
+                    error_message=retry_dec.reason,
+                )
+
+            # Check if prior submission already exists
+            prior_status = self._status_gateway.get_submission_status(
+                prior_submission_reference
+            )
+            if prior_status is not None and prior_status.portal_status in {
+                "RECEIVED",
+                "PENDING",
+                "APPROVED",
+            }:
+                # Prior submission exists -> do NOT resubmit!
+                return SubmissionResult(
+                    success=True,
+                    submission_reference=prior_submission_reference,
+                    initial_status=prior_status.portal_status,
+                    error_message="Pre-check confirmed prior submission exists. Re-submission halted to prevent duplicate.",
+                )
+
+        # 4. Pre-Action Safety Gate Execution (Deterministic Gate)
+        patient_rec = self._ehr.get_patient_record(PatientId(patient_id))
+        cov_rec = self._payer.get_coverage_status(
+            PatientId(patient_id), PlanId(plan_id)
+        )
+
+        reqs = None
+        if plan_id:
+            for proc in ProcedureType:
+                if proc.value in requirements_id:
+                    reqs = self._payer.get_prior_auth_requirements(
+                        PlanId(plan_id), proc
+                    )
+                    break
+            if reqs is None:
+                reqs = self._payer.get_prior_auth_requirements(
+                    PlanId(plan_id), ProcedureType.MRI_LUMBAR_SPINE
+                )
+
+        gathered_docs = [
+            self._doc_store.get_document_metadata(doc_id)
+            for doc_id in document_ids
+            if self._doc_store.get_document_metadata(doc_id) is not None
+        ]
+        req_types = list(reqs.required_document_types) if reqs else []
+
+        gate_res = evaluate_pre_submission_safety_gate(
+            patient_record=patient_rec,
+            coverage_record=cov_rec,
+            required_document_types=req_types,
+            gathered_documents=gathered_docs,
+            clinical_indication="Prior authorization submission via HealthFlow agent",
+        )
+
+        if not gate_res.allowed:
+            violation_summary = "; ".join(v.message for v in gate_res.violations)
+            return SubmissionResult(
+                success=False,
+                error_code="PRE_SUBMISSION_VALIDATION_FAILED",
+                error_message=f"Safety Gate Denied: {violation_summary}",
+            )
+
+        # Pre-submission package validation check
+        val_pkg = self.validate_authorization_package(
+            patient_id, plan_id, requirements_id, document_ids
+        )
+        if not val_pkg.is_valid:
+            return SubmissionResult(
+                success=False,
+                error_code="PRE_SUBMISSION_VALIDATION_FAILED",
+                error_message=f"Package failed validation prior to submission: missing={val_pkg.missing_fields}, conflicts={val_pkg.conflicts}",
+            )
+
+        # 5. Submission to Gateway
         payload = PortalSubmissionPayload(
             patient_id=patient_id,
             plan_id=plan_id,
@@ -392,6 +633,9 @@ class AgentTools:
         )
 
         ack = self._gateway.submit_authorization(payload)
+        if ack.success:
+            self._workflow_state = WorkflowState.MONITORING
+
         return SubmissionResult(
             success=ack.success,
             submission_reference=ack.submission_reference,
@@ -410,14 +654,29 @@ class AgentTools:
 
         Permission: WORKFLOW_READ. Read only.
         """
-        if not submission_reference or not submission_reference.strip():
+        # 1. Deterministic Input Validation
+        val = validate_patient_identifier(submission_reference)
+        if not val.is_valid:
             return AuthorizationStatusResult(
                 success=False,
-                error_code="INVALID_SUBMISSION_REF",
-                error_message="Submission reference must not be empty.",
+                error_code="INVALID_SUBMISSION_REF"
+                if val.error_code == "INVALID_IDENTIFIER"
+                else val.error_code,
+                error_message=val.error_message,
             )
 
-        clean_ref = submission_reference.strip()
+        # 2. Permission Check
+        perm = check_action_permission(
+            "get_authorization_status", self._workflow_state, self._actor_role
+        )
+        if not perm.allowed:
+            return AuthorizationStatusResult(
+                success=False,
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
+            )
+
+        clean_ref = str(val.sanitized_value)
         status_rec = self._status_gateway.get_submission_status(clean_ref)
         if status_rec is None:
             return AuthorizationStatusResult(
@@ -426,6 +685,7 @@ class AgentTools:
                 error_message=f"No portal status record found for submission reference '{clean_ref}'.",
             )
 
+        self._workflow_state = WorkflowState.VERIFYING
         return AuthorizationStatusResult(
             success=True,
             status=status_rec.portal_status,
@@ -441,36 +701,52 @@ class AgentTools:
     ) -> VerificationResult:
         """Independently confirm authorization outcome via separate access path (AD-004).
 
+        Evaluated by the Independent Verification Engine.
+        Enforces the DONE Principle (PRS §7): An external submission acknowledgment
+        is NOT completion. Outcome must be confirmed in authoritative external state.
         Permission: WORKFLOW_READ. Read only.
         """
-        if not submission_reference or not submission_reference.strip():
+        # 1. Deterministic Input Validation
+        val = validate_verification_inputs(submission_reference, expected_status)
+        if not val.is_valid:
             return VerificationResult(
                 verified=False,
                 actual_status="INVALID_INPUT",
-                verification_source="verification_port",
-                error_code="INVALID_SUBMISSION_REF",
-                error_message="Submission reference must not be empty.",
+                verification_source="safety_engine",
+                error_code=val.error_code,
+                error_message=val.error_message,
             )
 
-        clean_status = expected_status.strip().upper()
-        if clean_status not in {"APPROVED", "DENIED"}:
+        # 2. Permission Check
+        perm = check_action_permission(
+            "verify_authorization_outcome",
+            self._workflow_state,
+            self._actor_role,
+        )
+        if not perm.allowed:
             return VerificationResult(
                 verified=False,
-                actual_status="INVALID_EXPECTED_STATUS",
-                verification_source="verification_port",
-                error_code="INVALID_EXPECTED_STATUS",
-                error_message="Expected status must be either 'APPROVED' or 'DENIED'.",
+                actual_status="PERMISSION_DENIED",
+                verification_source="safety_engine",
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
             )
 
-        clean_ref = submission_reference.strip()
-        result = self._verification.verify_outcome(clean_ref, clean_status)
+        clean_ref = val.sanitized_value["submission_reference"]
+        clean_expected = val.sanitized_value["expected_status"]
+
+        # 3. Execution against VerificationProviderPort
+        external_result = self._verification.verify_outcome(clean_ref, clean_expected)
+
+        # 4. Evaluation via Independent Verification Engine
+        decision = evaluate_verification_outcome(clean_expected, external_result)
 
         return VerificationResult(
-            verified=result.verified,
-            actual_status=result.actual_status,
-            verification_source=result.verification_source,
-            error_code=None if result.verified else "VERIFICATION_MISMATCH",
-            error_message=None if result.verified else result.details,
+            verified=decision.is_confirmed,
+            actual_status=decision.actual_status,
+            verification_source=decision.verification_source,
+            error_code=decision.error_code,
+            error_message=decision.details,
         )
 
     # --------------------------------------------------------------------------
@@ -483,36 +759,30 @@ class AgentTools:
 
         Permission: WORKFLOW_ESCALATE. Mutating.
         """
-        if (
-            not reason_code
-            or reason_code.strip().upper() not in ALLOWED_ESCALATION_REASONS
-        ):
+        # 1. Deterministic Input Validation
+        val = validate_escalation_inputs(reason_code, reason_summary)
+        if not val.is_valid:
             return EscalationResult(
                 success=False,
-                error_code="INVALID_REASON_CODE",
-                error_message=f"Reason code must be one of: {sorted(ALLOWED_ESCALATION_REASONS)}.",
+                error_code=val.error_code,
+                error_message=val.error_message,
             )
 
-        if not reason_summary or not reason_summary.strip():
+        # 2. Permission Check
+        perm = check_action_permission(
+            "request_escalation", self._workflow_state, self._actor_role
+        )
+        if not perm.allowed:
             return EscalationResult(
                 success=False,
-                error_code="EMPTY_REASON_SUMMARY",
-                error_message="Reason summary must not be empty.",
-            )
-
-        if len(reason_summary.strip()) > 500:
-            return EscalationResult(
-                success=False,
-                error_code="REASON_SUMMARY_TOO_LONG",
-                error_message="Reason summary must not exceed 500 characters.",
+                error_code="PERMISSION_DENIED",
+                error_message=perm.denial_reason,
             )
 
         escalation_id = f"esc_{uuid.uuid4().hex[:8]}"
 
-        # If UoW is available, persist escalation event and transition workflow state
         if self._uow:
             with self._uow:
-                # Atomically record audit / escalation event if case exists
                 pass
 
         return EscalationResult(

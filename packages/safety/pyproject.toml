@@ -7,7 +7,9 @@ name = "healthflow-safety"
 version = "0.1.0"
 description = "HealthFlow safety layer — deterministic input validation, permission checks, and safety gates."
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2.7.0,<3.0.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
