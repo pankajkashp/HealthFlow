@@ -11,6 +11,13 @@ dependencies = [
     "fastapi>=0.115.0,<1.0.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",
     "pydantic>=2.7.0,<3.0.0",
+    "healthflow-application",
+    "healthflow-agent",
+    # Phase 6, decision 3 (docs/phases/PHASE_06_WALKTHROUGH.md): the composition root in
+    # dependencies.py is the one place in apps/api allowed to import domain/infrastructure
+    # directly, to wire concrete adapters into the application-layer services.
+    "healthflow-domain",
+    "healthflow-infrastructure",
 ]
 
 [project.optional-dependencies]
