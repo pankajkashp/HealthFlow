@@ -1,40 +1,47 @@
-# HealthFlow — Docker Compose for local development
+# HealthFlow — Docker Compose for local development and demo
 #
-# This file supports Phase 1 local development ONLY.
-#
-# Services defined here:
-#   api  — FastAPI application (apps/api/)
-#   web  — Next.js application (apps/web/)
-#   db   — PostgreSQL placeholder (no schema, no data — future phases)
-#
-# NOT configured in Phase 1:
-#   - Amazon Bedrock / Claude / Strands (agent phase is later)
-#   - Production AWS services
-#   - Real healthcare systems or data
-#   - Database schema or initialization scripts
+# Brings up the full stack: web (Next.js dashboard), api (FastAPI + the agent runtime), and db
+# (PostgreSQL, migrated and seeded with the 6 synthetic benchmark patients automatically).
 #
 # Usage:
 #   docker compose -f docker/docker-compose.yml up
 #
+# LLM provider (see docs/phases/PHASE_06_WALKTHROUGH.md, decision 1): LLM_PROVIDER defaults to
+# "scripted" (deterministic, no LLM credentials needed, always works). Set LLM_PROVIDER=anthropic
+# and ANTHROPIC_API_KEY in your shell (or a .env file next to this compose file) for the agent to
+# reason with a real Claude model. LLM_PROVIDER=bedrock uses AWS_REGION/BEDROCK_MODEL_ID instead,
+# matching the originally locked §17 tech stack, once Bedrock model access is available.
+#
 # Ref: docs/architecture/ARCHITECTURE.md §2
-# Ref: Phase 1 specification §6 (Docker foundation)
+# Ref: docs/phases/PHASE_06_WALKTHROUGH.md
 
 services:
 
   api:
     build:
-      context: ../apps/api
-      dockerfile: ../docker/api.Dockerfile
+      # Repo root: apps/api now depends on packages/* and services/agent (Phase 6, decision 3),
+      # so the build needs to reach the whole monorepo, not just apps/api.
+      context: ..
+      dockerfile: docker/api.Dockerfile
     ports:
       - "8000:8000"
     volumes:
       # Hot reload: mount source so changes reflect without rebuild
-      - ../apps/api/src:/app/src:ro
+      - ../apps/api/src:/app/apps/api/src:ro
+      - ../packages:/app/packages:ro
+      - ../services:/app/services:ro
     environment:
       APP_ENV: development
       LOG_LEVEL: INFO
       API_HOST: "0.0.0.0"
       API_PORT: "8000"
+      DATABASE_URL: "postgresql+psycopg://healthflow:${POSTGRES_PASSWORD:-changeme_local_only}@db:5432/healthflow_dev"
+      WEB_ORIGIN: "http://localhost:3000"
+      LLM_PROVIDER: "${LLM_PROVIDER:-scripted}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_MODEL_ID: "${ANTHROPIC_MODEL_ID:-claude-sonnet-4-5-20250929}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      BEDROCK_MODEL_ID: "${BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}"
     depends_on:
       db:
         condition: service_healthy
@@ -52,19 +59,9 @@ services:
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_URL: "http://localhost:8000"
+    depends_on:
+      - api
 
-  # ---------------------------------------------------------------------------
-  # PostgreSQL placeholder — Phase 1
-  #
-  # This service is a placeholder for future phases.
-  # The database schema is NOT defined in Phase 1.
-  # No initialization scripts are attached.
-  # No application code connects to this service in Phase 1.
-  #
-  # Schema implementation is deferred to the database schema specification phase.
-  # Ref: docs/architecture/ARCHITECTURE.md §14, AD-005 (PostgreSQL)
-  # Ref: Phase 1 specification §7 (Database restriction)
-  # ---------------------------------------------------------------------------
   db:
     image: postgres:16-alpine
     restart: unless-stopped

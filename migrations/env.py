@@ -18,10 +18,19 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    """Retrieve database URL from environment or alembic config."""
+    """Retrieve database URL from alembic config, environment, or the default.
+
+    Config takes priority over the DATABASE_URL environment variable so that programmatic callers
+    (e.g. tests isolating themselves to a separate database via
+    `Config.set_main_option("sqlalchemy.url", ...)`) are never silently overridden by whatever
+    DATABASE_URL happens to be set in the ambient shell — see
+    docs/phases/PHASE_06_WALKTHROUGH.md for the bug this previously caused (the migration test
+    always operated on the real dev database instead of its isolated test database whenever a
+    developer had DATABASE_URL exported, which is the project's own documented normal workflow).
+    """
     url = (
-        os.getenv("DATABASE_URL")
-        or config.get_main_option("sqlalchemy.url")
+        config.get_main_option("sqlalchemy.url")
+        or os.getenv("DATABASE_URL")
         or DEFAULT_DATABASE_URL
     )
     if url.startswith("postgresql://"):

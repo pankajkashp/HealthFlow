@@ -13,12 +13,16 @@ from healthflow_agent.agent import (
     ToolExecutionRecord,
 )
 from healthflow_agent.config import AgentConfig
+from healthflow_agent.llm_runner import LlmDrivenWorkflowRunner
 from healthflow_agent.prompts import HEALTHFLOW_SYSTEM_PROMPT
+from healthflow_agent.state_sync import WorkflowStateSync
 
 __all__ = [
     "HEALTHFLOW_SYSTEM_PROMPT",
     "AgentConfig",
     "AgentExecutionTrace",
     "HealthFlowAgent",
+    "LlmDrivenWorkflowRunner",
     "ToolExecutionRecord",
+    "WorkflowStateSync",
 ]

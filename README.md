@@ -37,7 +37,7 @@ Every significant administrative action is independently verified using an autho
 
 ## Current Phase
 
-**Phase 5 — Safety + Independent Verification (COMPLETE / PASS)**
+**Phase 6 — Production Polish, Frontend Integration & Demo Scenarios (COMPLETE / PASS)**
 
 - Phase 0A — Specification Foundation: PASS
 - Phase 0B — Technical Architecture: PASS
@@ -47,6 +47,11 @@ Every significant administrative action is independently verified using an autho
 - Phase 3 — Simulated Healthcare Systems: PASS
 - Phase 4 — AI Agent + Controlled Tools: PASS
 - Phase 5 — Safety + Independent Verification: PASS
+- Phase 6 — Production Polish, Frontend Integration & Demo Scenarios: PASS
+
+See `docs/phases/PHASE_06_WALKTHROUGH.md` for the full audit and `docs/phases/PHASE_06_DEMO_SCRIPT.md`
+for the Devpost demo walkthrough. Run `docker compose -f docker/docker-compose.yml up --build` to
+bring up the full working system.
 
 ---
 
