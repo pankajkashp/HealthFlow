@@ -95,6 +95,11 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+psycopg://healthflow:healthflow_ci@localhost:5432/healthflow_dev
+      # tests/integration/test_alembic_migrations.py and test_postgres_repositories.py isolate
+      # themselves to a separate database via TEST_DATABASE_URL — reuse the same service/role
+      # rather than their hardcoded default (postgres@localhost/healthflow_test with no password),
+      # which assumes a passwordless "postgres" superuser this service doesn't provision.
+      TEST_DATABASE_URL: postgresql+psycopg://healthflow:healthflow_ci@localhost:5432/healthflow_test
       LLM_PROVIDER: scripted
 
     steps:
@@ -115,6 +120,14 @@ jobs:
           pip install -e packages/infrastructure
           pip install -e services/agent
           pip install -e "apps/api[dev]"
+
+      - name: Create isolated test database
+        run: |
+          python -c "
+          import psycopg
+          conn = psycopg.connect('postgresql://healthflow:healthflow_ci@localhost:5432/healthflow_dev', autocommit=True)
+          conn.execute('CREATE DATABASE healthflow_test')
+          "
 
       - name: Run migrations
         run: alembic upgrade head
